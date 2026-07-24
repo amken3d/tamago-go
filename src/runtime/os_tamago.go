@@ -114,7 +114,15 @@ func getCPUCount() int32 {
 
 func osinit() {
 	physPageSize = 4096
-	numCPUStartup = 1
+
+	// SMP-capable platforms set goos.NumCPU (before osinit, in Hwinit0)
+	// and provide goos.Task to start the additional processors; the
+	// default is uniprocessor operation.
+	numCPUStartup = goos.NumCPU
+
+	if numCPUStartup < 1 {
+		numCPUStartup = 1
+	}
 
 	if goos.Bloc != 0 {
 		bloc = goos.Bloc

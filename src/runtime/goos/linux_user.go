@@ -40,6 +40,9 @@ const (
 	StackSystem         = 0
 )
 
+// NumCPU sets the initial GOMAXPROCS; see the tamago goos package.
+var NumCPU int32 = 1
+
 var (
 	RamStart       uint = 0x80000000
 	RamSize        uint = 0x20000000 // 512MB
