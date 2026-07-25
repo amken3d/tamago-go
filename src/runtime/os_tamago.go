@@ -277,6 +277,41 @@ const preemptMSupported = false
 
 func preemptM(mp *m) {}
 
+// tamagoPreempt requests cooperative preemption of the goroutine that was
+// running when an interrupt was taken. It is called from the platform IRQ
+// handler (see arm irqHandler), where the g register still holds the
+// interrupted goroutine, so getg() returns it.
+//
+// Bare-metal tamago has no async preemption (preemptMSupported == false) and no
+// OS to time-slice threads, so sysmon cannot run to call preemptone while a
+// goroutine monopolizes the single core. Poisoning stackguard0 here folds a
+// preemption request into the interrupted goroutine's next stack-growth check
+// (every function prologue), so it yields at its next call. Combined with a
+// periodic timer interrupt on the platform side, this gives the runtime the
+// time-slicing it would otherwise get from an OS.
+//
+//go:linkname tamagoPreempt
+//go:nosplit
+func tamagoPreempt() {
+	gp := getg()
+	if gp == nil {
+		return
+	}
+
+	mp := gp.m
+	if mp == nil {
+		return
+	}
+
+	// never poison the scheduler (g0) or signal (gsignal) stacks
+	if gp == mp.g0 || gp == mp.gsignal {
+		return
+	}
+
+	gp.stackguard0 = stackPreempt
+	gp.preempt = true
+}
+
 func minit() {
 	if goos.ProcID == nil {
 		return
