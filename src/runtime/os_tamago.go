@@ -308,6 +308,22 @@ func tamagoPreempt() {
 		return
 	}
 
+	// The g register is read at an arbitrary interrupt point, so treat it as
+	// untrusted: a stale or half-switched value would otherwise pass the nil
+	// check and this function would write two words through it, 100 times a
+	// second. mp.curg is the m's own record of which g is running, so requiring
+	// agreement rejects any g pointer the scheduler does not recognise.
+	if mp.curg != gp {
+		return
+	}
+
+	// Only a running g may be marked for preemption. Touching one mid-transition
+	// (_Gcopystack in particular, where newstack is rewriting stackguard0) races
+	// the runtime's own bookkeeping.
+	if readgstatus(gp)&^_Gscan != _Grunning {
+		return
+	}
+
 	gp.stackguard0 = stackPreempt
 	gp.preempt = true
 }
