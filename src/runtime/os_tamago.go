@@ -283,6 +283,14 @@ const preemptMSupported = true
 // redirect (tamagoSigPreempt) when the platform has armed it. Without a
 // platform hook the request is dropped, which is the pre-SMP behaviour:
 // single-processor configurations preempt via the periodic tick alone.
+//
+// Nosplit because tamagoTimeSlice calls it from the interrupt handler, on
+// the exception stack with the interrupted g in the g register -- a stack
+// check there is a guaranteed morestack-on-g0 fatal (it was). Everything
+// here must share the contract: the atomics are nosplit asm, and the
+// platform's goos.PreemptM hook must be nosplit too.
+//
+//go:nosplit
 func preemptM(mp *m) {
 	if goos.PreemptM == nil {
 		return
