@@ -549,6 +549,9 @@ func tamagoDeadmanCheck() {
 		}
 		dmPuts("\n")
 	}
+	if goos.DeadmanHook != nil {
+		goos.DeadmanHook()
+	}
 	dmPuts("[deadman] end\n")
 }
 

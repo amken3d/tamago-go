@@ -61,8 +61,9 @@ var (
 	AsyncPreempt bool
 
 	// SchedTick / RawPutc arm the deadman; see the tamago goos package.
-	SchedTick *uint32
-	RawPutc   func(c byte)
+	SchedTick   *uint32
+	RawPutc     func(c byte)
+	DeadmanHook func()
 
 	Hwinit0  = func() {}
 	InitRNG  = func() {}
