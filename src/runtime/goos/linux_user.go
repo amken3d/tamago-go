@@ -54,6 +54,12 @@ var (
 	ProcID func() uint64
 	Wake   func(uint64)
 
+	// PreemptM delivers an async preemption IPI; see the tamago goos package.
+	PreemptM func(uint64)
+
+	// AsyncPreempt arms trap-frame preemption; see the tamago goos package.
+	AsyncPreempt bool
+
 	Hwinit0  = func() {}
 	InitRNG  = func() {}
 	Nanotime = sys_clock_gettime

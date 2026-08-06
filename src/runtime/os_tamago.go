@@ -273,9 +273,97 @@ func semawakeup(mp *m) {
 	}
 }
 
-const preemptMSupported = false
+const preemptMSupported = true
 
-func preemptM(mp *m) {}
+// preemptM requests asynchronous preemption of mp. The pending flag is set
+// and the platform delivers an inter-processor interrupt to the processor
+// mp runs on (goos.PreemptM); that processor's interrupt handler brings the
+// interrupted goroutine to a safe point -- at minimum by the cooperative
+// poison (tamagoPreempt), and at async-safe points by the trap-frame
+// redirect (tamagoSigPreempt) when the platform has armed it. Without a
+// platform hook the request is dropped, which is the pre-SMP behaviour:
+// single-processor configurations preempt via the periodic tick alone.
+func preemptM(mp *m) {
+	if goos.PreemptM == nil {
+		return
+	}
+	if mp.signalPending.CompareAndSwap(0, 1) {
+		goos.PreemptM(mp.procid)
+	}
+}
+
+// tamagoTrapFrame is the interrupted context as the platform IRQ handler
+// lays it out (see the arm irqHandler): banked SP and LR first, then SPSR,
+// the general registers, and the adjusted return PC last. The PC slot is
+// the handler's pushed R14, so a rewritten pc rides its ordinary return
+// path; sp and lr are restored to the banked registers separately.
+type tamagoTrapFrame struct {
+	sp, lr, spsr uint32
+	r            [13]uint32
+	pc           uint32
+}
+
+// tamagoPreemptCheck decides, from the platform IRQ handler, whether the
+// interrupted context should be redirected through asyncPreempt, and hands
+// back the signal g (and its stack top) to run the redirect on. It runs on
+// the exception stack with the interrupted g still in the g register, so
+// like tamagoPreempt it must stay nosplit and treat that g as untrusted.
+//
+// A zero return means "leave the frame alone": the async tier is not armed
+// (goos.AsyncPreempt), no request is pending, or the moment is wrong (no g,
+// scheduler or signal g, mid-switch). A wrong moment still consumes the
+// request: the cooperative poison is already planted by tamagoPreempt, and
+// leaving the flag set would make preemptM drop every later request for
+// this m. doSigPreempt acknowledges every delivery for the same reason.
+//
+//go:linkname tamagoPreemptCheck
+//go:nosplit
+func tamagoPreemptCheck() (gsig uintptr, sp uintptr) {
+	if !goos.AsyncPreempt {
+		return 0, 0
+	}
+	gp := getg()
+	if gp == nil {
+		return 0, 0
+	}
+	mp := gp.m
+	if mp == nil || mp.gsignal == nil {
+		return 0, 0
+	}
+	if mp.signalPending.Load() == 0 {
+		return 0, 0
+	}
+	if gp == mp.g0 || gp == mp.gsignal || mp.curg != gp {
+		mp.preemptGen.Add(1)
+		mp.signalPending.Store(0)
+		return 0, 0
+	}
+	sg := mp.gsignal
+	return uintptr(unsafe.Pointer(sg)), sg.stack.hi
+}
+
+// tamagoSigPreempt is doSigPreempt for the bare-metal trap frame. The
+// platform IRQ handler calls it on gp.m's signal stack (g register and SP
+// switched, the same move a Unix signal makes) after tamagoPreemptCheck
+// accepted the moment. If the interrupted PC is an async-safe point the
+// frame is rewritten to enter asyncPreempt -- the ARM pushCall: the old LR
+// goes to the interrupted stack, LR becomes the resume PC, PC becomes
+// asyncPreempt -- and the request is acknowledged either way.
+//
+//go:linkname tamagoSigPreempt
+func tamagoSigPreempt(frame *tamagoTrapFrame, gp *g) {
+	if wantAsyncPreempt(gp) {
+		if ok, newpc := isAsyncSafePoint(gp, uintptr(frame.pc), uintptr(frame.sp), uintptr(frame.lr)); ok {
+			sp := frame.sp - 4
+			*(*uint32)(unsafe.Pointer(uintptr(sp))) = frame.lr
+			frame.sp = sp
+			frame.lr = uint32(newpc)
+			frame.pc = uint32(abi.FuncPCABI0(asyncPreempt))
+		}
+	}
+	gp.m.preemptGen.Add(1)
+	gp.m.signalPending.Store(0)
+}
 
 // tamagoPreempt requests cooperative preemption of the goroutine that was
 // running when an interrupt was taken. It is called from the platform IRQ
