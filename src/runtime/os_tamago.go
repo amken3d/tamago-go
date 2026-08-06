@@ -343,8 +343,24 @@ func tamagoPreemptCheck() (gsig uintptr, sp uintptr) {
 		return 0, 0
 	}
 	tamagoPreemptStats.accepted++
+	dmScratchInc(0xb1d0)
 	sg := mp.gsignal
 	return uintptr(unsafe.Pointer(sg)), sg.stack.hi
+}
+
+// dmScratchInc/dmScratch32 mirror diagnostic counters into the platform's
+// fixed post-mortem scratch (see the bmx board's postmortem.go): Go
+// variables die with a watchdog reset (bss is cleared at boot), fixed
+// scratch survives it and the next boot prints it. Bring-up diagnostics.
+//
+//go:nosplit
+func dmScratchInc(addr uintptr) {
+	*(*uint32)(unsafe.Pointer(addr))++
+}
+
+//go:nosplit
+func dmScratch32(addr uintptr, v uint32) {
+	*(*uint32)(unsafe.Pointer(addr)) = v
 }
 
 // tamagoPreemptStats counts the async tier's decision points, printed by
@@ -396,10 +412,16 @@ func tamagoSigPreempt(frame *tamagoTrapFrame, gp *g) {
 			*(*uint32)(unsafe.Pointer(uintptr(sp))) = frame.lr
 			frame.sp = sp
 			frame.lr = uint32(newpc)
-			frame.pc = uint32(abi.FuncPCABI0(asyncPreempt))
 			tamagoPreemptStats.rewritten++
+			dmScratchInc(0xb1d4)
+			dmScratch32(0xb1e0, frame.pc)
+			dmScratch32(0xb1e4, frame.sp)
+			dmScratch32(0xb1e8, frame.lr)
+			dmScratch32(0xb1ec, uint32(newpc))
+			frame.pc = uint32(abi.FuncPCABI0(asyncPreempt))
 		} else {
 			tamagoPreemptStats.unsafePC++
+			dmScratchInc(0xb1d8)
 		}
 	}
 	gp.m.preemptGen.Add(1)
