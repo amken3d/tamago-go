@@ -65,6 +65,7 @@ var (
 	RawPutc     func(c byte)
 	DeadmanHook func()
 	IRQAck      func() bool
+	RawTicks    func() uint32
 
 	Hwinit0  = func() {}
 	InitRNG  = func() {}

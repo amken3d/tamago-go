@@ -555,10 +555,10 @@ func tamagoTimeSlice() {
 // died. Output goes through goos.RawPutc, never print: the print path
 // takes locks a dead core can hold. A bring-up diagnostic.
 var tamagoDeadman struct {
-	irqs     uint32
-	starving uint32
+	n        uint32
 	lastTick uint32
-	fired    bool
+	lastAt   uint32 // RawTicks at the last tick advance (us-class)
+	fires    uint32
 }
 
 //go:nosplit
@@ -585,23 +585,33 @@ func dmHex(v uint64) {
 //go:nosplit
 func tamagoDeadmanCheck() {
 	d := &tamagoDeadman
-	if d.fired || goos.RawPutc == nil {
+	if goos.RawPutc == nil || goos.RawTicks == nil {
 		return
 	}
-	d.irqs++
-	if d.irqs%1024 != 0 {
+	// Sample every few entries, judge by TIME: interrupt counts race
+	// ahead by orders of magnitude in a preemption storm, and the first
+	// deadman false-fired off exactly that -- then its one-shot latch
+	// spent the dump before the real silence arrived. Three fires, ten
+	// seconds of no scheduler progress each.
+	d.n++
+	if d.n&63 != 0 {
 		return
 	}
+	now := goos.RawTicks()
 	tick := *goos.SchedTick
 	if tick != d.lastTick {
 		d.lastTick = tick
-		d.starving = 0
+		d.lastAt = now
 		return
 	}
-	if d.starving++; d.starving < 2 {
+	if now-d.lastAt < 10_000_000 { // 10s at 1 MHz; uint32 wrap-safe
 		return
 	}
-	d.fired = true
+	if d.fires >= 3 {
+		return
+	}
+	d.fires++
+	d.lastAt = now // next fire no sooner than another window
 
 	dmPuts("\n[deadman] scheduler starved; state dump (racy, lock-free):\n")
 	dmPuts("[deadman] async accepted ")
