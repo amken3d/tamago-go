@@ -422,6 +422,14 @@ func tamagoSigPreempt(frame *tamagoTrapFrame, gp *g) {
 		} else {
 			tamagoPreemptStats.unsafePC++
 			dmScratchInc(0xb1d8)
+			// Decorrelate the retry. Doorbell-to-handler latency on this
+			// hardware is nearly deterministic, so a retry loop (suspendG)
+			// samples the SAME unsafe PC of a tight loop every time --
+			// observed as ~10k consumed preemptions a second landing
+			// nowhere. A pseudo-random dawdle before resuming shifts the
+			// interrupted loop's phase against the next delivery; signal
+			// jitter provides this for free on hosted systems.
+			procyield(32 + uint32(nanotime())&0x1ff)
 		}
 	}
 	gp.m.preemptGen.Add(1)
