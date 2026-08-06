@@ -64,6 +64,7 @@ var (
 	SchedTick   *uint32
 	RawPutc     func(c byte)
 	DeadmanHook func()
+	IRQAck      func() bool
 
 	Hwinit0  = func() {}
 	InitRNG  = func() {}

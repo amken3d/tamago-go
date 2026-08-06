@@ -382,6 +382,21 @@ var tamagoPreemptStats struct {
 	unsafePC  uint32
 }
 
+// tamagoIRQAck lets the platform acknowledge self-contained interrupt
+// sources (its periodic tick, its wake doorbell) inside the handler, so
+// the relay-model core can return unmasked without involving the service
+// goroutine. True means nothing is left pending: the handler skips the
+// relay and does not re-mask. Nosplit: interrupt context, exception stack.
+//
+//go:linkname tamagoIRQAck
+//go:nosplit
+func tamagoIRQAck() bool {
+	if goos.IRQAck == nil {
+		return false
+	}
+	return goos.IRQAck()
+}
+
 // tamagoPreemptAck consumes a pending preemptM request on paths that never
 // run the async tier (core 0's relay-model IRQ handler): the delivery did
 // its job -- the interrupt was taken and the poison planted -- and the flag
