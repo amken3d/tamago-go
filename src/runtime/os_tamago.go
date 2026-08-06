@@ -319,27 +319,53 @@ type tamagoTrapFrame struct {
 //go:linkname tamagoPreemptCheck
 //go:nosplit
 func tamagoPreemptCheck() (gsig uintptr, sp uintptr) {
-	if !goos.AsyncPreempt {
-		return 0, 0
-	}
 	gp := getg()
 	if gp == nil {
 		return 0, 0
 	}
 	mp := gp.m
-	if mp == nil || mp.gsignal == nil {
+	if mp == nil {
 		return 0, 0
 	}
 	if mp.signalPending.Load() == 0 {
 		return 0, 0
 	}
-	if gp == mp.g0 || gp == mp.gsignal || mp.curg != gp {
+	if !goos.AsyncPreempt || mp.gsignal == nil ||
+		gp == mp.g0 || gp == mp.gsignal || mp.curg != gp {
+		// The request cannot be served asynchronously (tier not armed, or
+		// the moment is wrong), but it MUST still be consumed: preemptM
+		// only delivers on a 0->1 transition, so a flag left set here
+		// would silence every future IPI to this m. The cooperative
+		// poison is already planted; acknowledging is correct and matches
+		// doSigPreempt, which acknowledges every delivery.
 		mp.preemptGen.Add(1)
 		mp.signalPending.Store(0)
 		return 0, 0
 	}
 	sg := mp.gsignal
 	return uintptr(unsafe.Pointer(sg)), sg.stack.hi
+}
+
+// tamagoPreemptAck consumes a pending preemptM request on paths that never
+// run the async tier (core 0's relay-model IRQ handler): the delivery did
+// its job -- the interrupt was taken and the poison planted -- and the flag
+// must clear or preemptM never rings this m's doorbell again.
+//
+//go:linkname tamagoPreemptAck
+//go:nosplit
+func tamagoPreemptAck() {
+	gp := getg()
+	if gp == nil {
+		return
+	}
+	mp := gp.m
+	if mp == nil {
+		return
+	}
+	if mp.signalPending.Load() != 0 {
+		mp.preemptGen.Add(1)
+		mp.signalPending.Store(0)
+	}
 }
 
 // tamagoSigPreempt is doSigPreempt for the bare-metal trap frame. The
