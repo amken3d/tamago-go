@@ -455,6 +455,9 @@ func tamagoPreempt() {
 	if goos.SchedTick != nil {
 		tamagoDeadmanCheck()
 	}
+	if goos.PreemptM != nil {
+		tamagoTimeSlice()
+	}
 
 	gp := getg()
 	if gp == nil {
@@ -489,6 +492,35 @@ func tamagoPreempt() {
 
 	gp.stackguard0 = stackPreempt
 	gp.preempt = true
+}
+
+// tamagoTimeSlice is sysmon's time-slicing role, bare-metal style. There
+// is no sysmon thread here, and only the interrupt-taking core's running
+// goroutine gets the cooperative poison -- a core that takes no interrupts
+// never yields, so any always-runnable goroutine on a secondary starves
+// its P's peers forever (observed: six workers freezing the background
+// sweeper, which runtime.GC waits on, before a single preemption was ever
+// sent). Piggybacking on the interrupt-driven core's tick, every eighth
+// invocation rings the doorbell of every OTHER M running a goroutine; the
+// receiving handler plants the poison on its own core, and always-runnable
+// goroutines get sliced at tens-of-milliseconds granularity everywhere.
+var tamagoSliceN uint32
+
+//go:nosplit
+func tamagoTimeSlice() {
+	tamagoSliceN++
+	if tamagoSliceN&7 != 0 {
+		return
+	}
+	var self *m
+	if gp := getg(); gp != nil {
+		self = gp.m
+	}
+	for mp := allm; mp != nil; mp = mp.alllink {
+		if mp != self && mp.curg != nil {
+			preemptM(mp)
+		}
+	}
 }
 
 // The deadman: a wedged scheduler silences every Go-level witness, but
