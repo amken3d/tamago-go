@@ -407,6 +407,10 @@ func tamagoSigPreempt(frame *tamagoTrapFrame, gp *g) {
 //go:linkname tamagoPreempt
 //go:nosplit
 func tamagoPreempt() {
+	if goos.SchedTick != nil {
+		tamagoDeadmanCheck()
+	}
+
 	gp := getg()
 	if gp == nil {
 		return
@@ -440,6 +444,112 @@ func tamagoPreempt() {
 
 	gp.stackguard0 = stackPreempt
 	gp.preempt = true
+}
+
+// The deadman: a wedged scheduler silences every Go-level witness, but
+// interrupts keep firing, and tamagoPreempt runs on each one. When the
+// platform arms goos.SchedTick (pointing at a counter some ordinary
+// goroutine advances), this watches for a long stretch of interrupts with
+// no advance and then dumps scheduler state -- racily, lock-free, from
+// interrupt context, because any lock may be held by the very core that
+// died. Output goes through goos.RawPutc, never print: the print path
+// takes locks a dead core can hold. A bring-up diagnostic.
+var tamagoDeadman struct {
+	irqs     uint32
+	starving uint32
+	lastTick uint32
+	fired    bool
+}
+
+//go:nosplit
+func dmPuts(s string) {
+	for i := 0; i < len(s); i++ {
+		goos.RawPutc(s[i])
+	}
+}
+
+//go:nosplit
+func dmHex(v uint64) {
+	const digits = "0123456789abcdef"
+	dmPuts("0x")
+	started := false
+	for i := 60; i >= 0; i -= 4 {
+		d := byte(v>>uint(i)) & 0xf
+		if d != 0 || started || i == 0 {
+			goos.RawPutc(digits[d])
+			started = true
+		}
+	}
+}
+
+//go:nosplit
+func tamagoDeadmanCheck() {
+	d := &tamagoDeadman
+	if d.fired || goos.RawPutc == nil {
+		return
+	}
+	d.irqs++
+	if d.irqs%1024 != 0 {
+		return
+	}
+	tick := *goos.SchedTick
+	if tick != d.lastTick {
+		d.lastTick = tick
+		d.starving = 0
+		return
+	}
+	if d.starving++; d.starving < 2 {
+		return
+	}
+	d.fired = true
+
+	dmPuts("\n[deadman] scheduler starved; state dump (racy, lock-free):\n")
+	dmPuts("[deadman] sched.lock.key ")
+	dmHex(uint64(sched.lock.key))
+	dmPuts(" gomaxprocs ")
+	dmHex(uint64(uint32(gomaxprocs)))
+	dmPuts("\n")
+
+	for i := 0; i < len(allp); i++ {
+		pp := allp[i]
+		if pp == nil {
+			continue
+		}
+		dmPuts("[deadman] P")
+		dmHex(uint64(uint32(pp.id)))
+		dmPuts(" status ")
+		dmHex(uint64(pp.status))
+		dmPuts(" m ")
+		dmHex(uint64(uintptr(pp.m)))
+		dmPuts(" runq ")
+		dmHex(uint64((pp.runqtail - pp.runqhead) % uint32(len(pp.runq))))
+		dmPuts("\n")
+	}
+
+	for mp := allm; mp != nil; mp = mp.alllink {
+		dmPuts("[deadman] M")
+		dmHex(uint64(uint32(mp.id)))
+		dmPuts(" procid ")
+		dmHex(mp.procid)
+		dmPuts(" locks ")
+		dmHex(uint64(uint32(mp.locks)))
+		dmPuts(" spin ")
+		if mp.spinning {
+			dmPuts("1")
+		} else {
+			dmPuts("0")
+		}
+		dmPuts(" sema ")
+		dmHex(uint64(mp.waitsemacount))
+		dmPuts(" curg ")
+		if mp.curg != nil {
+			dmHex(uint64(mp.curg.goid))
+		} else {
+			dmPuts("-")
+		}
+		dmPuts("\n")
+	}
+	dmPuts("[deadman] end\n")
 }
 
 func minit() {

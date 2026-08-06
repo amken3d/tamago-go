@@ -60,6 +60,10 @@ var (
 	// AsyncPreempt arms trap-frame preemption; see the tamago goos package.
 	AsyncPreempt bool
 
+	// SchedTick / RawPutc arm the deadman; see the tamago goos package.
+	SchedTick *uint32
+	RawPutc   func(c byte)
+
 	Hwinit0  = func() {}
 	InitRNG  = func() {}
 	Nanotime = sys_clock_gettime
