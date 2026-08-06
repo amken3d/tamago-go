@@ -342,8 +342,20 @@ func tamagoPreemptCheck() (gsig uintptr, sp uintptr) {
 		mp.signalPending.Store(0)
 		return 0, 0
 	}
+	tamagoPreemptStats.accepted++
 	sg := mp.gsignal
 	return uintptr(unsafe.Pointer(sg)), sg.stack.hi
+}
+
+// tamagoPreemptStats counts the async tier's decision points, printed by
+// the deadman: how many deliveries were accepted for the trap-frame path,
+// how many interrupted PCs isAsyncSafePoint approved (frames actually
+// rewritten into asyncPreempt), and how many it declined. Racy counters,
+// diagnostic only.
+var tamagoPreemptStats struct {
+	accepted  uint32
+	rewritten uint32
+	unsafePC  uint32
 }
 
 // tamagoPreemptAck consumes a pending preemptM request on paths that never
@@ -385,6 +397,9 @@ func tamagoSigPreempt(frame *tamagoTrapFrame, gp *g) {
 			frame.sp = sp
 			frame.lr = uint32(newpc)
 			frame.pc = uint32(abi.FuncPCABI0(asyncPreempt))
+			tamagoPreemptStats.rewritten++
+		} else {
+			tamagoPreemptStats.unsafePC++
 		}
 	}
 	gp.m.preemptGen.Add(1)
@@ -504,6 +519,13 @@ func tamagoDeadmanCheck() {
 	d.fired = true
 
 	dmPuts("\n[deadman] scheduler starved; state dump (racy, lock-free):\n")
+	dmPuts("[deadman] async accepted ")
+	dmHex(uint64(tamagoPreemptStats.accepted))
+	dmPuts(" rewritten ")
+	dmHex(uint64(tamagoPreemptStats.rewritten))
+	dmPuts(" unsafe ")
+	dmHex(uint64(tamagoPreemptStats.unsafePC))
+	dmPuts("\n")
 	dmPuts("[deadman] sched.lock.key ")
 	dmHex(uint64(sched.lock.key))
 	dmPuts(" gomaxprocs ")
