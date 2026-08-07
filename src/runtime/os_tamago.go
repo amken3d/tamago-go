@@ -174,6 +174,23 @@ func write1(fd uintptr, buf unsafe.Pointer, count int32) int32 {
 
 	c := uintptr(count)
 
+	// Deliver the payload whole when the platform accepts writes at that
+	// granularity (see goos.Write): an SMP console serializes whole writes
+	// where per-byte delivery would interleave concurrent writers mid-line.
+	// The slice header is built by hand (nosplit context), and the buffer
+	// pointer is laundered through noescape: the callers' print buffers
+	// live on the stack and must not be flagged as escaping through the
+	// indirect call -- the hook's contract is that it does not retain p.
+	if goos.Write != nil && count > 0 {
+		var b []byte
+		s := (*slice)(unsafe.Pointer(&b))
+		s.array = noescape(buf)
+		s.len = int(count)
+		s.cap = int(count)
+		goos.Write(b)
+		return int32(c)
+	}
+
 	for i := uintptr(0); i < c; i++ {
 		p := (*byte)(unsafe.Pointer(uintptr(buf) + i))
 		goos.Printk(*p)

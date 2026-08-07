@@ -67,6 +67,10 @@ var (
 	IRQAck      func() bool
 	RawTicks    func() uint32
 
+	// Write receives whole console write payloads; see the tamago goos
+	// package.
+	Write func(p []byte)
+
 	Hwinit0  = func() {}
 	InitRNG  = func() {}
 	Nanotime = sys_clock_gettime
