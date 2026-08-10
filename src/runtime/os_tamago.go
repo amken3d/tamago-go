@@ -644,6 +644,22 @@ func tamagoDeadmanCheck() {
 	dmHex(uint64(uint32(gomaxprocs)))
 	dmPuts("\n")
 
+	// Whether a stop-the-world is in progress, and how many Ps it is still
+	// waiting for. This is the difference between "the world is stopped and
+	// whoever stopped it is stuck" and "the world will not stop because
+	// something will not yield", which have nothing in common but the symptom.
+	dmPuts("[deadman] gcwaiting ")
+	if sched.gcwaiting.Load() {
+		dmPuts("1")
+	} else {
+		dmPuts("0")
+	}
+	dmPuts(" stopwait ")
+	dmHex(uint64(uint32(sched.stopwait)))
+	dmPuts(" npidle ")
+	dmHex(uint64(sched.npidle.Load()))
+	dmPuts("\n")
+
 	for i := 0; i < len(allp); i++ {
 		pp := allp[i]
 		if pp == nil {
@@ -682,6 +698,46 @@ func tamagoDeadmanCheck() {
 			dmPuts("-")
 		}
 		dmPuts("\n")
+
+		// The goroutine that will not stop is the whole question, and its
+		// number alone cannot answer it. Status says whether it is running or
+		// already parked; the poison flags say whether a preemption request
+		// even reached it; and the PC says WHERE, which is the one fact that
+		// turns this from deduction into a lookup:
+		//
+		//	go tool addr2line build/kernel.elf <<< 0x<pc>
+		//
+		// Printed for every M with a g, because a wedge involving two is a
+		// different animal from one involving one.
+		if gp := mp.curg; gp != nil {
+			dmPuts("[deadman]   g")
+			dmHex(uint64(gp.goid))
+			dmPuts(" status ")
+			dmHex(uint64(gp.atomicstatus.Load()))
+			dmPuts(" poisoned ")
+			if gp.stackguard0 == stackPreempt {
+				dmPuts("1")
+			} else {
+				dmPuts("0")
+			}
+			dmPuts(" preempt ")
+			if gp.preempt {
+				dmPuts("1")
+			} else {
+				dmPuts("0")
+			}
+			dmPuts(" preemptStop ")
+			if gp.preemptStop {
+				dmPuts("1")
+			} else {
+				dmPuts("0")
+			}
+			dmPuts(" pc ")
+			dmHex(uint64(gp.sched.pc))
+			dmPuts(" sp ")
+			dmHex(uint64(gp.sched.sp))
+			dmPuts("\n")
+		}
 	}
 	if goos.DeadmanHook != nil {
 		goos.DeadmanHook()
