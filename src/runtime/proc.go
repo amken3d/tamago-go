@@ -2908,6 +2908,47 @@ func newm(fn func(), pp *p, id int64) {
 		if id > 0 {
 			sched.mnext--
 		}
+
+		// A stop-the-world may be counting this P right now, and returning it
+		// to the idle list here STRANDS it: stopTheWorldWithSema drains that
+		// list once, before we arrive, and never looks at it again. The stop
+		// then waits forever on a P that no M will ever pick up -- the machine
+		// stays healthy in every other respect, which is what makes it so hard
+		// to see. Report the P stopped instead, exactly as gcstopm and handoffp
+		// do on the paths that already check.
+		//
+		// Every other route that gives a P back tests gcwaiting under this same
+		// lock. This one is reached only on a custom GOOS, where Ms are capped
+		// at GOMAXPROCS, so it is the one place the invariant was never applied.
+		//
+		// The same applies to the forEachP handshake below, for the same
+		// reason: forEachP records how many Ps it is still waiting on, and a P
+		// that goes idle here without running its safe-point function is one it
+		// waits on forever.
+		if sched.gcwaiting.Load() {
+			pp.status = _Pgcstop
+			pp.gcStopTime = nanotime()
+			sched.stopwait--
+			if sched.stopwait == 0 {
+				notewakeup(&sched.stopnote)
+			}
+			unlock(&sched.lock)
+
+			releasem(getg().m)
+			return
+		}
+
+		// Run any pending safe-point function before parking the P, and
+		// account for it -- handoffp does exactly this, in this order, and then
+		// goes on to park the P as well. forEachP is waiting on the count.
+		if pp.runSafePointFn != 0 && atomic.Cas(&pp.runSafePointFn, 1, 0) {
+			sched.safePointFn(pp)
+			sched.safePointWait--
+			if sched.safePointWait == 0 {
+				notewakeup(&sched.safePointNote)
+			}
+		}
+
 		pidleput(pp, 0)
 		unlock(&sched.lock)
 
@@ -7443,6 +7484,7 @@ func pidleput(pp *p, now int64) int64 {
 	pp.link = sched.pidle
 	sched.pidle.set(pp)
 	sched.npidle.Add(1)
+	tamagoPidleTrace(pp.id, sched.gcwaiting.Load(), sys.GetCallerPC())
 	if !pp.limiterEvent.start(limiterEventIdle, now) {
 		throw("must be able to track idle limiter event")
 	}
