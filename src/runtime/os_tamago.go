@@ -658,6 +658,23 @@ func tamagoDeadmanCheck() {
 	dmHex(uint64(uint32(sched.stopwait)))
 	dmPuts(" npidle ")
 	dmHex(uint64(sched.npidle.Load()))
+
+	// npidle is a COUNT and pidle is the LIST it counts. Printing both is the
+	// point: a stop-the-world waiting for one P while a P sits idle can mean
+	// either that the list really holds it and nothing came back for it, or
+	// that the count and the list disagree -- a lost cross-core update. Those
+	// are different bugs with the same symptom, and nothing else in this dump
+	// distinguishes them.
+	dmPuts(" pidle ")
+	if pp := sched.pidle.ptr(); pp != nil {
+		dmPuts("P")
+		dmHex(uint64(uint32(pp.id)))
+	} else {
+		dmPuts("empty")
+	}
+
+	dmPuts(" nmspinning ")
+	dmHex(uint64(uint32(sched.nmspinning.Load())))
 	dmPuts("\n")
 
 	for i := 0; i < len(allp); i++ {
@@ -739,6 +756,8 @@ func tamagoDeadmanCheck() {
 			dmPuts("\n")
 		}
 	}
+	dmPidleTrace()
+
 	if goos.DeadmanHook != nil {
 		goos.DeadmanHook()
 	}
